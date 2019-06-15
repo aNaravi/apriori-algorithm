@@ -1,10 +1,11 @@
-import os
-from tempfile import mkdtemp
+import argparse
 import numpy as np
 import pandas as pd
+from scipy.sparse import lil_array
 
+CHUNK = 100000000
 
-def generate_frequent_itemsets(collection, K, F, **kwargs):
+def generate_frequent_itemsets(K: int, minsup: float, collection: str, prefix: str):
 
     def candidates_generator(frequent_itemsets):
         for i, itemset in enumerate(frequent_itemsets):
@@ -16,41 +17,27 @@ def generate_frequent_itemsets(collection, K, F, **kwargs):
                 else:
                     break
 
-    max_chunk_size = kwargs.get("max_chunk_size", 50000000)
 
-    with open('docword.' + collection + '.txt') as file:
-        D, W = [int(next(file).split('\\')[0]) for n in range(2)]
+    with open(f"{prefix}/docword.{collection}.txt") as file:
+        D, W = [int(next(file).split('\\')[0]) for _ in range(2)]
 
-    try:
-        MX = np.zeros((D,W), dtype=np.int8)
-    except MemoryError:
-        filename = os.path.join(mkdtemp(), 'MX.dat')
-        MX = np.memmap(filename, dtype=np.int8, mode='w+', shape=(D,W))
-        for docword in pd.read_csv('docword.' + collection + '.txt', skiprows=3, sep=' ',
-                                   names=['docID', 'wordID'], usecols=[0, 1],
-                                   chunksize=max_chunk_size):
-            MX[docword.docID.values - 1, docword.wordID.values - 1] = 1
-        del docword
-    else:
-        docword = pd.read_csv('docword.' + collection + '.txt', skiprows=3, sep=' ', names=['docID', 'wordID'], usecols=[0, 1])
-        MX[docword.docID.values - 1,docword.wordID.values - 1] = 1
+    MX = lil_array((D, W), dtype=np.int8)
+    with pd.read_csv(f"{prefix}/docword.{collection}.txt", skiprows=3, sep=' ', names=['docID', 'wordID'], usecols=[0, 1], iterator=True) as reader:
+        docword = reader.get_chunk(CHUNK)
+        MX[docword['docID'].values - 1, docword['wordID'].values - 1] = 1
+    del docword
 
-    frequent_itemsets = np.where(MX.sum(axis=0) >= D * F)[0].reshape(-1,1)
-    i = 2
-    while i <= K and frequent_itemsets.size > 0:
-        freq = np.empty((0,i), dtype=np.int)
-        for c in candidates_generator(frequent_itemsets):
-            if np.all(MX[:, c], axis=1).sum() >= D * F:
-                freq = np.append(freq, c.reshape(1,-1), axis=0)
-        frequent_itemsets = freq
-        i += 1
+    MX = MX.tocsc()
+    k = 1
+    F_k = np.flatnonzero(MX.sum(axis=0) >= D * minsup).reshape(-1,1)
 
-    if type(MX) == np.core.memmap:
-        del MX
-        os.remove(filename)
-        os.removedirs(os.path.dirname(filename))
-        print("Deleted ", filename)
+    while (frequent_itemsets := F_k).size > 0 and (k := k + 1) <= K:
+        F_k = np.empty((0, k), dtype=np.int32)
+        for candidate in candidates_generator(frequent_itemsets):
+            if (MX[:, candidate].sum(axis=1) >= len(candidate)).sum() >= D * minsup:
+                F_k = np.append(F_k, candidate.reshape(1,-1), axis=0)
+    del MX
 
-    vocab = pd.read_csv('vocab.' + collection + '.txt', names=['words'])
+    vocab = pd.read_csv(f"{prefix}/vocab.{collection}.txt", names=["words"]).squeeze("columns")
 
-    return vocab.words.values[frequent_itemsets]
+    return vocab.values[frequent_itemsets]
