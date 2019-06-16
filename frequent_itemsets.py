@@ -1,7 +1,12 @@
+import os
 import argparse
+import json
+import datetime as dt
 import numpy as np
 import pandas as pd
 from scipy.sparse import lil_array
+
+from utilities import jsonEncoder, Timer
 
 CHUNK = 100000000
 
@@ -43,9 +48,18 @@ def main(K: int, minsup: float, minconf: float, collection: str, prefix: str):
     del docword
     MX = MX.tocsc()
 
-    F_K = frequent_itemsets(K, minsup, D, MX)
-    print(f"{vocab.values[F_K]}")
+    with Timer("Frequent Itemsets") as t:
+        F_K = frequent_itemsets(K, minsup, D, MX)
 
+    print(f"{t} \t {len(F_K)}")
+
+    result = {
+        "frequent_itemsets": vocab.values[F_K]
+    }
+
+    os.makedirs("outputs", exist_ok=True)
+    with open(f"outputs/apriori_{dt.datetime.now():%y-%m-%d_%H-%M-%S}_{collection}_K{K}_S{minsup}.json", 'w') as fp:
+        json.dump(result, fp, indent=4, cls=jsonEncoder)
 
 
 if __name__ == "__main__":
