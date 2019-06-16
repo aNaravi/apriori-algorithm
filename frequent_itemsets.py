@@ -8,7 +8,7 @@ from scipy.sparse import lil_array
 
 from utilities import jsonEncoder, Timer
 
-CHUNK = 100000000
+CHUNK = 10000000
 
 def generate_itemset_candidates(frequent_itemsets):
     for i, itemset in enumerate(frequent_itemsets):
@@ -36,22 +36,27 @@ def frequent_itemsets(K: int, minsup: float, ntransactions: int, MX):
 
 
 def main(K: int, minsup: float, minconf: float, collection: str, prefix: str):
-    with open(f"{prefix}/docword.{collection}.txt") as file:
-        D, W = [int(next(file).split('\\')[0]) for _ in range(2)]
+    with Timer("Adjacency Matrix") as t1:
+        with open(f"{prefix}/docword.{collection}.txt") as file:
+            D, W = [int(next(file).split('\\')[0]) for _ in range(2)]
 
-    vocab = pd.read_csv(f"{prefix}/vocab.{collection}.txt", names=["words"]).squeeze("columns")
+        vocab = pd.read_csv(f"{prefix}/vocab.{collection}.txt", sep='\t', names=["words"]).squeeze("columns")
 
-    MX = lil_array((D, W), dtype=np.int8)
-    with pd.read_csv(f"{prefix}/docword.{collection}.txt", skiprows=3, sep=' ', names=['docID', 'wordID'], usecols=[0, 1], iterator=True) as reader:
-        docword = reader.get_chunk(CHUNK)
-        MX[docword['docID'].values - 1, docword['wordID'].values - 1] = 1
-    del docword
-    MX = MX.tocsc()
+        docword_len = 0
+        MX = lil_array((D, W), dtype=np.int8)
+        with pd.read_csv(f"{prefix}/docword.{collection}.txt", skiprows=3, sep=' ', names=['docID', 'wordID'], usecols=[0, 1], chunksize=CHUNK) as reader:
+            for docword in reader:
+                MX[docword['docID'].values - 1, docword['wordID'].values - 1] = 1
+                docword_len += len(docword)
+            del docword
+        MX = MX.tocsc()
 
-    with Timer("Frequent Itemsets") as t:
+    print(f"{t1} \t MX: {(MX.data.nbytes + MX.indices.nbytes + MX.indptr.nbytes) * 8 / (1000 ** 2):.2f}MB  docword: {docword_len}")
+
+    with Timer("Frequent Itemsets") as t2:
         F_K = frequent_itemsets(K, minsup, D, MX)
 
-    print(f"{t} \t {len(F_K)}")
+    print(f"{t2} \t {len(F_K)}")
 
     result = {
         "frequent_itemsets": vocab.values[F_K]
